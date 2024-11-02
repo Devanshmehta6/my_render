@@ -2,20 +2,20 @@
 
 from io import BytesIO
 from django.http import HttpResponse, JsonResponse
-import numpy as np
+# import numpy as np
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework import status
-import cv2
+# import cv2
 import os
 import zipfile
 from django.conf import settings
 from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 import PyPDF2
-from PIL import Image
-import rembg
-from rembg import remove
+# from PIL import Image
+# import rembg
+# from rembg import remove
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
