@@ -1,12 +1,17 @@
 
 
 from io import BytesIO
-from django.http import HttpResponse, JsonResponse
+import shutil
+import subprocess
+import tempfile
+from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
 # import numpy as np
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework import status
 # import cv2
+from django.core.files.storage import FileSystemStorage
+from django.core.files.base import ContentFile
 import os
 import zipfile
 from django.conf import settings
@@ -16,6 +21,9 @@ import PyPDF2
 # from PIL import Image
 # import rembg
 # from rembg import remove
+# from . import notescan
+# from notescan import notescan_main, get_argument_parser
+
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
@@ -49,6 +57,7 @@ class FileOperationsViewSet(viewsets.ViewSet):
         # Save uploaded file temporarily
         temp_pdf_path = default_storage.save(uploaded_file.name, uploaded_file)
         temp_pdf_full_path = default_storage.path(temp_pdf_path)
+        print(temp_pdf_full_path)
 
         # Define output folder for split PDFs
         output_folder = os.path.join(settings.MEDIA_ROOT, "split_pdfs")
@@ -111,62 +120,34 @@ class FileOperationsViewSet(viewsets.ViewSet):
                 response = HttpResponse(merged_pdf.read(), content_type='application/pdf')
                 response['Content-Disposition'] = 'attachment; filename="merged_output.pdf"'
                 return response
+
+
+    @action(detail=False, methods=["post"])
+    def process_notes(self, request):
+        file = request.FILES.get('file')
+
+        # Create a temporary filename
+        temp_filename = f'temp_{file.name}'
+        with open(temp_filename, 'wb+') as destination:
+            for chunk in file.chunks():
+                destination.write(chunk)
+        try:
+            os.system(f"python notescan.py {temp_filename}")
+        except subprocess.CalledProcessError as e:
+            # Handle errors from notescan.py
+            return HttpResponse(f"Error processing files: {e}", status=500)
+
+        os.remove(temp_filename)
+        file_path = os.path.join(os.getcwd(), 'page0000.png')  # Assuming it's in the current directory
+
+    # Check if the file exists
+        if os.path.exists(file_path):
+            return FileResponse(open(file_path, 'rb'), as_attachment=True, filename='page0000.png')
+        else:
+            return HttpResponseNotFound("File not found")
+        
+        
+
+
     
-    # @action(detail=False, methods=['post'])
-    # def detect_face(self, request):
-    #     images = request.FILES.getlist('images')
-    #     processed_images = []
-
-    #     # Load the pre-trained face detection model
-    #     face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    #     face_cascade = cv2.CascadeClassifier(face_cascade_path)
-
-    #     for image_file in images:
-    #         # Load image with PIL for processing
-    #         input_image = Image.open(image_file)
-
-    #         # Convert to OpenCV format for face detection
-    #         img_cv = cv2.cvtColor(np.array(input_image), cv2.COLOR_RGB2BGR)
-    #         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-
-    #         # Detect faces
-    #         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-    #         if len(faces) > 0:
-    #             # Convert the PIL image to bytes for rembg
-    #             input_buffer = BytesIO()
-    #             input_image.save(input_buffer, format="PNG")
-    #             input_bytes = input_buffer.getvalue()
-
-    #             # Remove background using rembg and read back as a PIL image
-    #             output_image_bytes = remove(input_bytes)
-    #             output_image = Image.open(BytesIO(output_image_bytes)).convert("RGBA")
-
-    #             # Add a white background
-    #             white_bg = Image.new("RGBA", output_image.size, "WHITE")
-    #             output_image = Image.alpha_composite(white_bg, output_image).convert("RGB")
-    #         else:
-    #             # Keep the original image if no face is detected
-    #             output_image = input_image.convert("RGB")
-            
-    #         output_buffer = BytesIO()
-    #         output_image.save(output_buffer, format="JPEG", quality=85)
-    #         output_buffer.seek(0)
-    #         processed_images.append((f"processed_{image_file.name}", output_buffer))
-
-    #     if len(processed_images) == 1:
-    #         # Return single image as a downloadable file
-    #         filename, image_buffer = processed_images[0]
-    #         response = HttpResponse(image_buffer, content_type="image/jpeg")
-    #         response['Content-Disposition'] = f'attachment; filename="{filename}"'
-    #         return response
-    #     else:
-    #             # Create a ZIP file if multiple images
-    #         zip_buffer = BytesIO()
-    #         with zipfile.ZipFile(zip_buffer, "w") as zip_file:
-    #             for filename, image_buffer in processed_images:
-    #                 zip_file.writestr(filename, image_buffer.getvalue())
-    #         zip_buffer.seek(0)
-    #         response = HttpResponse(zip_buffer, content_type="application/zip")
-    #         response['Content-Disposition'] = 'attachment; filename="processed_images.zip"'
-    #     return HttpResponse('gubgou')
+    
