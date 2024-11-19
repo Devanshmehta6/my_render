@@ -15,9 +15,9 @@ from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 import PyPDF2
 
-import cv2
-from rembg import remove
-from PIL import Image, ImageOps
+# import cv2
+# from rembg import remove
+# from PIL import Image, ImageOps
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
