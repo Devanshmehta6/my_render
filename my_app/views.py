@@ -1,15 +1,11 @@
 
 
-from io import BytesIO
-import shutil
 import subprocess
 import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
-# import numpy as np
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework import status
-# import cv2
 from django.core.files.storage import FileSystemStorage
 from django.core.files.base import ContentFile
 import os
@@ -18,12 +14,10 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 import PyPDF2
-# from PIL import Image
-# import rembg
-# from rembg import remove
-# from . import notescan
-# from notescan import notescan_main, get_argument_parser
 
+import cv2
+from rembg import remove
+from PIL import Image, ImageOps
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
@@ -145,9 +139,54 @@ class FileOperationsViewSet(viewsets.ViewSet):
             return FileResponse(open(file_path, 'rb'), as_attachment=True, filename='page0000.png')
         else:
             return HttpResponseNotFound("File not found")
-        
-        
-
-
     
-    
+    @action(detail=False, methods=['post'])
+    def detectFace(self, request):
+        try:
+            # Get the uploaded file
+            uploaded_file = request.FILES.get('image')
+            if not uploaded_file:
+                return JsonResponse({'error': 'No image file provided.'}, status=400)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_input:
+                temp_input.write(uploaded_file.read())
+                temp_input_path = temp_input.name
+                
+            img = cv2.imread(temp_input_path)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Load the pre-trained face detection model
+            face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            face_cascade = cv2.CascadeClassifier(face_cascade_path)
+
+            # Detect faces in the image
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+            if len(faces) > 0:
+                # Face detected, remove background
+                input_image = Image.open(temp_input_path)
+                output_image = remove(input_image)
+                output_image = output_image.convert("RGBA")  # Ensure alpha channel
+                white_bg = Image.new("RGBA", output_image.size, "WHITE")
+                output_image = Image.alpha_composite(white_bg, output_image).convert("RGB")
+            else:
+                # No face detected, keep the original image
+                output_image = Image.open(temp_input_path).convert("RGB")
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_output:
+                temp_output_path = temp_output.name
+                output_image.save(temp_output_path, "JPEG", quality=85)
+
+            # Prepare the response with the processed image
+            with open(temp_output_path, 'rb') as f:
+                response = HttpResponse(f.read(), content_type="image/jpeg")
+                response['Content-Disposition'] = 'inline; filename="processed_image.jpg"'
+
+            # Clean up temporary files
+            os.remove(temp_input_path)
+            os.remove(temp_output_path)
+
+            return response
+
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
