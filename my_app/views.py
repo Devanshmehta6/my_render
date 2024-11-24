@@ -329,76 +329,76 @@ class FileOperationsViewSet(viewsets.ViewSet):
             messages.error(request, f'Error during conversion: {str(e)}')
             return HttpResponse("error here")
     
-    # def audio_to_text(self,audio_path):
-    #     recognizer = sr.Recognizer()
+    def audio_to_text(self,audio_path):
+        recognizer = sr.Recognizer()
 
-    #     # Convert MP3 to WAV using pydub
-    #     wav_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    #     try:
-    #         audio = AudioSegment.from_file(audio_path)
-    #         audio.export(wav_file.name, format="wav")
+        # Convert MP3 to WAV using pydub
+        wav_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio.export(wav_file.name, format="wav")
 
-    #         # Use the WAV file for speech recognition
-    #         with sr.AudioFile(wav_file.name) as source:
-    #             audio_data = recognizer.record(source)
-    #             text = recognizer.recognize_google(audio_data)
-    #             return text
-    #     except sr.UnknownValueError:
-    #         return "Could not understand the audio."
-    #     except sr.RequestError:
-    #         return "Request error. Please check your network connection."
-    #     except Exception as e:
-    #         return f"Error processing audio file: {str(e)}"
-    #     finally:
-    #         if os.path.exists(wav_file.name):
-    #             pass
-    #             # os.unlink(wav_file.name)  # Clean up temporary WAV file
+            # Use the WAV file for speech recognition
+            with sr.AudioFile(wav_file.name) as source:
+                audio_data = recognizer.record(source)
+                text = recognizer.recognize_google(audio_data)
+                return text
+        except sr.UnknownValueError:
+            return "Could not understand the audio."
+        except sr.RequestError:
+            return "Request error. Please check your network connection."
+        except Exception as e:
+            return f"Error processing audio file: {str(e)}"
+        finally:
+            if os.path.exists(wav_file.name):
+                pass
+                # os.unlink(wav_file.name)  # Clean up temporary WAV file
 
 
-    # def text_to_pdf(self,text):
-    #     pdf = FPDF()
-    #     pdf.set_auto_page_break(auto=True, margin=15)
-    #     pdf.add_page()
+    def text_to_pdf(self,text):
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
 
-    #     pdf.set_font("Arial", size=12)
-    #     pdf.multi_cell(0, 10, text)
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, text)
 
-    #     pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    #     pdf.output(pdf_file.name)
-    #     return pdf_file.name
+        pdf_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        pdf.output(pdf_file.name)
+        return pdf_file.name
 
-    # @action(detail=False, methods=["post"])
-    # def audio_to_pdf_view(self,request):
-    #     if request.method == "POST" and request.FILES.get("file"):
-    #         audio_file = request.FILES["file"]
+    @action(detail=False, methods=["post"])
+    def audio_to_pdf_view(self,request):
+        if request.method == "POST" and request.FILES.get("file"):
+            audio_file = request.FILES["file"]
 
-    #         # Save the uploaded audio file to a temporary location
-    #         temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    #         try:
-    #             for chunk in audio_file.chunks():
-    #                 temp_audio.write(chunk)
-    #             temp_audio.close()
+            # Save the uploaded audio file to a temporary location
+            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            try:
+                for chunk in audio_file.chunks():
+                    temp_audio.write(chunk)
+                temp_audio.close()
 
-    #             # Convert audio to text
-    #             text = self.audio_to_text(temp_audio.name)
-    #             if not text or "Error" in text:
-    #                 return JsonResponse({"error": text}, status=400)
+                # Convert audio to text
+                text = self.audio_to_text(temp_audio.name)
+                if not text or "Error" in text:
+                    return JsonResponse({"error": text}, status=400)
 
-    #             # Convert text to PDF
-    #             pdf_path = self.text_to_pdf(text)
+                # Convert text to PDF
+                pdf_path = self.text_to_pdf(text)
 
-    #             # Serve the PDF as a response
-    #             with open(pdf_path, "rb") as pdf_file:
-    #                 response = HttpResponse(pdf_file.read(), content_type="application/pdf")
-    #                 response["Content-Disposition"] = f"attachment; filename=output.pdf"
-    #                 return response
+                # Serve the PDF as a response
+                with open(pdf_path, "rb") as pdf_file:
+                    response = HttpResponse(pdf_file.read(), content_type="application/pdf")
+                    response["Content-Disposition"] = f"attachment; filename=output.pdf"
+                    return response
 
-    #         finally:
-    #             print("fine")
-    #             # Clean up temporary files
-    #             # if os.path.exists(temp_audio.name):
-    #             #     os.unlink(temp_audio.name)
-    #             # if os.path.exists(pdf_path):
-    #             #     os.unlink(pdf_path)
+            finally:
+                print("fine")
+                # Clean up temporary files
+                # if os.path.exists(temp_audio.name):
+                #     os.unlink(temp_audio.name)
+                # if os.path.exists(pdf_path):
+                #     os.unlink(pdf_path)
 
-    #     return JsonResponse({"error": "Invalid request"}, status=400)
+        return JsonResponse({"error": "Invalid request"}, status=400)
