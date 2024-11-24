@@ -1,8 +1,11 @@
 
 
+from datetime import datetime
+from io import BytesIO
 import subprocess
 import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
+import pandas as pd
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -16,9 +19,11 @@ from rest_framework import viewsets, status
 import PyPDF2
 from PIL import Image
 import numpy as np
-# import cv2
-# from rembg import remove
-# from PIL import Image, ImageOps
+from django.utils.text import slugify
+import pdfkit
+# from openpyxl import Workbook
+from django.contrib import messages 
+
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
@@ -234,3 +239,89 @@ class FileOperationsViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
+    
+    @action(detail=False, methods=["post"])
+    def excel_to_pdf(self, request):
+        excel_file = request.FILES.get('file')
+
+        if not excel_file:
+            messages.error(request, 'Please select an Excel file to convert.')
+            # return redirect('excel_to_pdf')  # Redirect back to form
+
+        try:
+            # Read Excel file
+            df = pd.read_excel(excel_file)
+
+            # Convert DataFrame to HTML with basic styling
+            html_content = df.to_html(index=False)
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    table {{
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin: 20px 0;
+                    }}
+                    th, td {{
+                        border: 1px solid #ddd;
+                        padding: 8px;
+                        text-align: left;
+                    }}
+                    th {{
+                        background-color: #f2f2f2;
+                    }}
+                    tr:nth-child(even) {{
+                        background-color: #f9f9f9;
+                    }}
+                </style>
+            </head>
+            <body>   
+
+                {html_content}
+            </body>
+            </html>
+            """
+
+            # Generate temporary filename for HTML and PDF
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            temp_html_filename = f"temp_excel_conversion_{timestamp}.html"
+            temp_pdf_filename = f"excel_to_pdf_{timestamp}.pdf"
+
+            # Create temporary HTML file in media directory (configurable)
+            temp_html_path = os.path.join(settings.MEDIA_ROOT, temp_html_filename)
+            with open(temp_html_path, "w", encoding='utf-8') as f:
+                f.write(html_content)
+
+            # Configure PDF options (optional)
+            options = {
+                'page-size': 'A4',
+                'margin-top': '0.75in',
+                'margin-right': '0.75in',
+                'margin-bottom': '0.75in',
+                'margin-left': '0.75in',
+                'encoding': "UTF-8",
+                'no-outline': None
+            }
+
+            # Generate PDF using wkhtmltopdf (ensure it's installed and configured)
+            pdfkit.from_file(temp_html_path, os.path.join(settings.MEDIA_ROOT, temp_pdf_filename), options=options)
+
+            # Serve the generated PDF as a download response
+            with open(os.path.join(settings.MEDIA_ROOT, temp_pdf_filename), 'rb') as f:
+                pdf_content = f.read()
+
+            response = HttpResponse(pdf_content, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{temp_pdf_filename}"'
+
+            # Clean up temporary files
+            os.remove(temp_html_path)
+            os.remove(os.path.join(settings.MEDIA_ROOT, temp_pdf_filename))  # Remove PDF after download
+
+            messages.success(request, 'PDF generated successfully!')
+            return response
+
+        except Exception as e:
+            messages.error(request, f'Error during conversion: {str(e)}')
+            return HttpResponse("error here")
