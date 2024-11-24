@@ -14,7 +14,8 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 import PyPDF2
-
+from PIL import Image
+import numpy as np
 # import cv2
 # from rembg import remove
 # from PIL import Image, ImageOps
@@ -140,53 +141,96 @@ class FileOperationsViewSet(viewsets.ViewSet):
         else:
             return HttpResponseNotFound("File not found")
     
-    # @action(detail=False, methods=['post'])
-    # def detectFace(self, request):
-    #     try:
-    #         # Get the uploaded file
-    #         uploaded_file = request.FILES.get('image')
-    #         if not uploaded_file:
-    #             return JsonResponse({'error': 'No image file provided.'}, status=400)
+    def lanczos_kernel(self, x, a=3):
+        if x == 0:
+            return 1
+        elif abs(x) < a:
+            return np.sinc(x) * np.sinc(x / a)
+        else:
+            return 0
+    
+    def resample_lanczos_1d(self,data, new_size, a=3):
+        old_size = len(data)
+        scale = old_size / new_size
+        resampled = np.zeros(new_size)
+        
+        for i in range(new_size):
+            orig_x = i * scale
+            value = 0
+            for j in range(-a + 1, a): 
+                neighbor_x = int(np.floor(orig_x)) + j
+                if 0 <= neighbor_x < old_size:  
+                    value += data[neighbor_x] * self.lanczos_kernel(orig_x - neighbor_x, a)
+            resampled[i] = value
+        
+        return resampled
 
-    #         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_input:
-    #             temp_input.write(uploaded_file.read())
-    #             temp_input_path = temp_input.name
-                
-    #         img = cv2.imread(temp_input_path)
-    #         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    def lanczos_resample(self, image_array, new_width, new_height, a=3):
+        temp = np.array([self.resample_lanczos_1d(row, new_width, a) for row in image_array])
+        resampled_image = np.array([self.resample_lanczos_1d(temp[:, i], new_height, a) for i in range(temp.shape[1])]).T
+        return resampled_image
 
-    #         # Load the pre-trained face detection model
-    #         face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-    #         face_cascade = cv2.CascadeClassifier(face_cascade_path)
+    @action(detail=False, methods=["post"])
+    def imageCompressor(self, request):
+        input_file = request.FILES.get('file')  # Filename
+        scale_factor = 0.5  # Default scale factor is 0.5
+        
+        if not input_file:
+            return JsonResponse({"error": "Input file parameter is required."}, status=400)
+        
+        try:
+            # Save uploaded file to default storage
+            temp_file_path = default_storage.save(input_file.name, input_file)
+            temp_file_full_path = default_storage.path(temp_file_path)
+            print(f"Uploaded file saved at: {temp_file_full_path}")
 
-    #         # Detect faces in the image
-    #         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            # Define output folder under MEDIA_ROOT
+            output_folder = os.path.join(settings.MEDIA_ROOT, "resampled_images")
+            os.makedirs(output_folder, exist_ok=True)
 
-    #         if len(faces) > 0:
-    #             # Face detected, remove background
-    #             input_image = Image.open(temp_input_path)
-    #             output_image = remove(input_image)
-    #             output_image = output_image.convert("RGBA")  # Ensure alpha channel
-    #             white_bg = Image.new("RGBA", output_image.size, "WHITE")
-    #             output_image = Image.alpha_composite(white_bg, output_image).convert("RGB")
-    #         else:
-    #             # No face detected, keep the original image
-    #             output_image = Image.open(temp_input_path).convert("RGB")
+            # Output file path
+            file_base, file_ext = os.path.splitext(input_file.name)
+            output_file = f"{file_base}_resampled{file_ext}"
+            output_file_path = os.path.join(output_folder, output_file)
 
-    #         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_output:
-    #             temp_output_path = temp_output.name
-    #             output_image.save(temp_output_path, "JPEG", quality=85)
+            # Open the image and convert to numpy array
+            image = Image.open(temp_file_full_path)
+            image_array = np.array(image)
 
-    #         # Prepare the response with the processed image
-    #         with open(temp_output_path, 'rb') as f:
-    #             response = HttpResponse(f.read(), content_type="image/jpeg")
-    #             response['Content-Disposition'] = 'inline; filename="processed_image.jpg"'
+            # Calculate new dimensions
+            height, width = image_array.shape[:2]
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
 
-    #         # Clean up temporary files
-    #         os.remove(temp_input_path)
-    #         os.remove(temp_output_path)
+            # Apply Lanczos resampling
+            if len(image_array.shape) == 3:  # RGB or RGBA image
+                resampled_channels = [
+                    self.lanczos_resample(image_array[..., channel], new_width, new_height)
+                    for channel in range(image_array.shape[2])
+                ]
+                resampled_array = np.stack(resampled_channels, axis=-1)
+            else:  # Grayscale image
+                resampled_array = self.lanczos_resample(image_array, new_width, new_height)
 
-    #         return response
+            # Convert back to image and save
+            resampled_image = Image.fromarray(np.clip(resampled_array, 0, 255).astype('uint8'))
+            resampled_image.save(output_file_path)
 
-    #     except Exception as e:
-    #         return JsonResponse({'error': str(e)}, status=500)
+            # Delete temporary uploaded file
+            if default_storage.exists(temp_file_path):
+                default_storage.delete(temp_file_path)
+
+            response = FileResponse(open(output_file_path, 'rb'), as_attachment=True, filename=output_file)
+
+            # Add cleanup for output file after response
+            # def cleanup_file(file_path):
+            #     if os.path.exists(file_path):
+            #         os.remove(file_path)
+
+            # response['cleanup_file_path'] = output_file_path  # Custom attribute for cleanup
+            # response.close = lambda *args, **kwargs: cleanup_file(response['cleanup_file_path']) or super(FileResponse, response).close(*args, **kwargs)
+
+            return response
+        
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
