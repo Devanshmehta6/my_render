@@ -149,99 +149,137 @@ class FileOperationsViewSet(viewsets.ViewSet):
         else:
             return HttpResponseNotFound("File not found")
     
-    def lanczos_kernel(self, x, a=3):
-        if x == 0:
-            return 1
-        elif abs(x) < a:
-            return np.sinc(x) * np.sinc(x / a)
-        else:
-            return 0
+    # def lanczos_kernel(self, x, a=3):
+    #     if x == 0:
+    #         return 1
+    #     elif abs(x) < a:
+    #         return np.sinc(x) * np.sinc(x / a)
+    #     else:
+    #         return 0
     
-    def resample_lanczos_1d(self,data, new_size, a=3):
-        old_size = len(data)
-        scale = old_size / new_size
-        resampled = np.zeros(new_size)
+    # def resample_lanczos_1d(self,data, new_size, a=3):
+    #     old_size = len(data)
+    #     scale = old_size / new_size
+    #     resampled = np.zeros(new_size)
         
-        for i in range(new_size):
-            orig_x = i * scale
-            value = 0
-            for j in range(-a + 1, a): 
-                neighbor_x = int(np.floor(orig_x)) + j
-                if 0 <= neighbor_x < old_size:  
-                    value += data[neighbor_x] * self.lanczos_kernel(orig_x - neighbor_x, a)
-            resampled[i] = value
+    #     for i in range(new_size):
+    #         orig_x = i * scale
+    #         value = 0
+    #         for j in range(-a + 1, a): 
+    #             neighbor_x = int(np.floor(orig_x)) + j
+    #             if 0 <= neighbor_x < old_size:  
+    #                 value += data[neighbor_x] * self.lanczos_kernel(orig_x - neighbor_x, a)
+    #         resampled[i] = value
         
-        return resampled
+    #     return resampled
 
-    def lanczos_resample(self, image_array, new_width, new_height, a=3):
-        temp = np.array([self.resample_lanczos_1d(row, new_width, a) for row in image_array])
-        resampled_image = np.array([self.resample_lanczos_1d(temp[:, i], new_height, a) for i in range(temp.shape[1])]).T
-        return resampled_image
+    # def lanczos_resample(self, image_array, new_width, new_height, a=3):
+    #     temp = np.array([self.resample_lanczos_1d(row, new_width, a) for row in image_array])
+    #     resampled_image = np.array([self.resample_lanczos_1d(temp[:, i], new_height, a) for i in range(temp.shape[1])]).T
+    #     return resampled_image
 
+    # @action(detail=False, methods=["post"])
+    # def imageCompressor(self, request):
+    #     input_file = request.FILES.get('file')  # Filename
+    #     scale_factor = 0.5  # Default scale factor is 0.5
+        
+    #     if not input_file:
+    #         return JsonResponse({"error": "Input file parameter is required."}, status=400)
+        
+    #     try:
+    #         # Save uploaded file to default storage
+    #         temp_file_path = default_storage.save(input_file.name, input_file)
+    #         temp_file_full_path = default_storage.path(temp_file_path)
+    #         print(f"Uploaded file saved at: {temp_file_full_path}")
+
+    #         # Define output folder under MEDIA_ROOT
+    #         output_folder = os.path.join(settings.MEDIA_ROOT, "resampled_images")
+    #         os.makedirs(output_folder, exist_ok=True)
+
+    #         # Output file path
+    #         file_base, file_ext = os.path.splitext(input_file.name)
+    #         output_file = f"{file_base}_resampled{file_ext}"
+    #         output_file_path = os.path.join(output_folder, output_file)
+
+    #         # Open the image and convert to numpy array
+    #         image = Image.open(temp_file_full_path)
+    #         image_array = np.array(image)
+
+    #         # Calculate new dimensions
+    #         height, width = image_array.shape[:2]
+    #         new_width = int(width * scale_factor)
+    #         new_height = int(height * scale_factor)
+
+    #         # Apply Lanczos resampling
+    #         if len(image_array.shape) == 3:  # RGB or RGBA image
+    #             resampled_channels = [
+    #                 self.lanczos_resample(image_array[..., channel], new_width, new_height)
+    #                 for channel in range(image_array.shape[2])
+    #             ]
+    #             resampled_array = np.stack(resampled_channels, axis=-1)
+    #         else:  # Grayscale image
+    #             resampled_array = self.lanczos_resample(image_array, new_width, new_height)
+
+    #         # Convert back to image and save
+    #         resampled_image = Image.fromarray(np.clip(resampled_array, 0, 255).astype('uint8'))
+    #         resampled_image.save(output_file_path)
+
+    #         # Delete temporary uploaded file
+    #         if default_storage.exists(temp_file_path):
+    #             default_storage.delete(temp_file_path)
+
+    #         response = FileResponse(open(output_file_path, 'rb'), as_attachment=True, filename=output_file)
+
+    #         # Add cleanup for output file after response
+    #         # def cleanup_file(file_path):
+    #         #     if os.path.exists(file_path):
+    #         #         os.remove(file_path)
+
+    #         # response['cleanup_file_path'] = output_file_path  # Custom attribute for cleanup
+    #         # response.close = lambda *args, **kwargs: cleanup_file(response['cleanup_file_path']) or super(FileResponse, response).close(*args, **kwargs)
+
+    #         return response
+        
+    #     except Exception as e:
+    #         return JsonResponse({"error": str(e)}, status=500)
     @action(detail=False, methods=["post"])
-    def imageCompressor(self, request):
-        input_file = request.FILES.get('file')  # Filename
-        scale_factor = 0.5  # Default scale factor is 0.5
-        
-        if not input_file:
-            return JsonResponse({"error": "Input file parameter is required."}, status=400)
-        
-        try:
-            # Save uploaded file to default storage
-            temp_file_path = default_storage.save(input_file.name, input_file)
-            temp_file_full_path = default_storage.path(temp_file_path)
-            print(f"Uploaded file saved at: {temp_file_full_path}")
+    def imageCompressor(self,request):
+        if request.method == "POST" and request.FILES.get("file"):
+            
+            image_file = request.FILES["file"]
+            scale_factor = float(request.POST.get("scale_factor", 0.5))  # Default to 0.5 if not provided
 
-            # Define output folder under MEDIA_ROOT
-            output_folder = os.path.join(settings.MEDIA_ROOT, "resampled_images")
-            os.makedirs(output_folder, exist_ok=True)
+            try:
+                # Open the image from the uploaded file
+                image = Image.open(image_file)
 
-            # Output file path
-            file_base, file_ext = os.path.splitext(input_file.name)
-            output_file = f"{file_base}_resampled{file_ext}"
-            output_file_path = os.path.join(output_folder, output_file)
+                # Get the original format of the uploaded image (e.g., 'JPEG', 'PNG', etc.)
+                img_format = image.format
 
-            # Open the image and convert to numpy array
-            image = Image.open(temp_file_full_path)
-            image_array = np.array(image)
+                # Calculate new dimensions
+                width, height = image.size
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
 
-            # Calculate new dimensions
-            height, width = image_array.shape[:2]
-            new_width = int(width * scale_factor)
-            new_height = int(height * scale_factor)
+                # Resize the image
+                downsampled_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-            # Apply Lanczos resampling
-            if len(image_array.shape) == 3:  # RGB or RGBA image
-                resampled_channels = [
-                    self.lanczos_resample(image_array[..., channel], new_width, new_height)
-                    for channel in range(image_array.shape[2])
-                ]
-                resampled_array = np.stack(resampled_channels, axis=-1)
-            else:  # Grayscale image
-                resampled_array = self.lanczos_resample(image_array, new_width, new_height)
+                # Save the downsampled image to a BytesIO object in the original format
+                img_io = BytesIO()
+                downsampled_image.save(img_io, format=img_format)
+                img_io.seek(0)
 
-            # Convert back to image and save
-            resampled_image = Image.fromarray(np.clip(resampled_array, 0, 255).astype('uint8'))
-            resampled_image.save(output_file_path)
+                # Return the image as a downloadable response with the correct content type
+                content_type = f"image/{img_format.lower()}"
+                response = HttpResponse(img_io, content_type=content_type)
+                response["Content-Disposition"] = f'attachment; filename="downsampled_image.{img_format.lower()}"'
+                return response
 
-            # Delete temporary uploaded file
-            if default_storage.exists(temp_file_path):
-                default_storage.delete(temp_file_path)
+            except Exception as e:
+                return JsonResponse({"error": f"Error processing the image: {str(e)}"}, status=400)
 
-            response = FileResponse(open(output_file_path, 'rb'), as_attachment=True, filename=output_file)
+        return JsonResponse({"error": "Invalid request"}, status=400)
 
-            # Add cleanup for output file after response
-            # def cleanup_file(file_path):
-            #     if os.path.exists(file_path):
-            #         os.remove(file_path)
-
-            # response['cleanup_file_path'] = output_file_path  # Custom attribute for cleanup
-            # response.close = lambda *args, **kwargs: cleanup_file(response['cleanup_file_path']) or super(FileResponse, response).close(*args, **kwargs)
-
-            return response
-        
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
     
     @action(detail=False, methods=["post"])
     def excel_to_pdf(self, request):
