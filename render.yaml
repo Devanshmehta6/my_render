@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: my-render-app
+    env: python
+    plan: free
+    buildCommand: |
+      sudo apt-get update
+      sudo apt-get install -y ghostscript
+      pip install -r requirements.txt
+    startCommand: gunicorn my_render.wsgi:application
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: postgres://your-db-url
+      - key: MEDIA_ROOT
+        value: /opt/render/media
+      - key: STATIC_ROOT
+        value: /opt/render/static
+    disk:
+      - name: media-storage
+        mountPath: /opt/render/media
+        sizeGB: 1
