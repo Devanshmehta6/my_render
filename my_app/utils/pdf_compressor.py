@@ -11,7 +11,7 @@ import shutil
 class PDFCompressor:
     def __init__(self):
         # Specify the Ghostscript executable path (Update this if necessary)
-        self.GS_PATH = 'gs'
+        self.GS_PATH =  'gs' # r"C:\Program Files\gs\gs10.04.0\bin\gswin64c.exe" #'gs'
 
         self.compression_commands = {
             'light': {

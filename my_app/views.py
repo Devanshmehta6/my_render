@@ -3,7 +3,7 @@
 from datetime import datetime, time
 from io import BytesIO
 import subprocess
-import tempfile
+# import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
 import pandas as pd
 from rest_framework.decorators import action, api_view
@@ -18,14 +18,14 @@ from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
 import PyPDF2
 from PIL import Image
-import numpy as np
-from django.utils.text import slugify
+# import numpy as np
+# from django.utils.text import slugify
 import pdfkit
 # from openpyxl import Workbook
 from django.contrib import messages 
-from fpdf import FPDF
-import speech_recognition as sr
-from pydub import AudioSegment
+# from fpdf import FPDF
+# import speech_recognition as sr
+# from pydub import AudioSegment
 
 import shutil
 from pathlib import Path
