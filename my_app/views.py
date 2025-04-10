@@ -1,7 +1,9 @@
 
 
 from datetime import datetime, time
+
 from io import BytesIO
+import json
 import subprocess
 # import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
@@ -32,9 +34,52 @@ from pathlib import Path
 from django.core.files.base import ContentFile
 from .utils.pdf_compressor import PDFCompressor
 
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import unpad
+from Crypto.Hash import SHA256, HMAC
+
+
 
 
 class FileOperationsViewSet(viewsets.ViewSet):
+
+    def generate_key(self, password):
+        # This should match your JavaScript PBKDF2 settings
+        salt = b"your-static-salt"  # Must match the salt used in JS
+        iterations = 100000
+        key = PBKDF2(password.encode(), salt, dkLen=32, count=iterations, prf=lambda p, s: HMAC.new(p, s, SHA256).digest())
+        return key
+
+    def encrypt_file(self, data, password):
+        # Generate key
+        key = self.generate_key(password)
+        
+        # Generate random IV
+        iv = os.urandom(12)
+        
+        # Encrypt
+        cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+        ciphertext, tag = cipher.encrypt_and_digest(data)
+        
+        # Combine IV and ciphertext
+        encrypted_data = iv + ciphertext
+        
+        return encrypted_data
+    
+    def decrypt_file(self, encrypted_data, password):
+        # Extract IV (first 12 bytes)
+        iv = encrypted_data[:12]
+        ciphertext = encrypted_data[12:]
+        
+        # Generate key
+        key = self.generate_key(password)
+        print('key', key)
+        # Decrypt
+        cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
+        decrypted_data = cipher.decrypt(ciphertext)
+        
+        return decrypted_data
 
     def split_pdf(self, pdf_path, output_folder):
         with open(pdf_path, 'rb') as f:
@@ -52,7 +97,7 @@ class FileOperationsViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'])
     def split_pdf_file(self, request):
-        """Endpoint to handle PDF splitting."""
+        # """Endpoint to handle PDF splitting."""
         uploaded_file = request.FILES.get('file')
 
         if not uploaded_file:
@@ -84,6 +129,8 @@ class FileOperationsViewSet(viewsets.ViewSet):
         finally:
             if os.path.exists(zip_filepath):
                 os.remove(zip_filepath)
+    #     
+
 
     def merge_pdfs(self, pdf_files):
         merger = PyPDF2.PdfMerger()
@@ -104,6 +151,7 @@ class FileOperationsViewSet(viewsets.ViewSet):
             pdf_files = request.FILES.getlist('files')
             if not pdf_files:
                 return JsonResponse({"error": "No files provided"}, status=400)
+            
             try:
                 merged_pdf_path = self.merge_pdfs(pdf_files)
             except Exception as e:
@@ -140,15 +188,55 @@ class FileOperationsViewSet(viewsets.ViewSet):
             return HttpResponseNotFound("File not found")
     
     
-    @action(detail=False, methods=["post"])
-    def imageCompressor(self,request):
-        if request.method == "POST" and request.FILES.get("file"):
+    # @action(detail=False, methods=["post"])
+    # def imageCompressor(self,request):
+    #     if request.method == "POST" and request.FILES.get("file"):
             
-            image_file = request.FILES["file"]
-            scale_factor = float(request.POST.get("scale_factor", 0.5))  # Default to 0.5 if not provided
+    #         image_file = request.FILES["file"]
+    #         scale_factor = float(request.POST.get("scale_factor", 0.5))  # Default to 0.5 if not provided
 
+    #         try:
+    #             image = Image.open(image_file)
+    #             img_format = image.format
+
+    #             width, height = image.size
+    #             new_width = int(width * scale_factor)
+    #             new_height = int(height * scale_factor)
+
+    #             downsampled_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+    #             img_io = BytesIO()
+    #             downsampled_image.save(img_io, format=img_format)
+    #             img_io.seek(0)
+
+    #             content_type = f"image/{img_format.lower()}"
+    #             response = HttpResponse(img_io, content_type=content_type)
+    #             response["Content-Disposition"] = f'attachment; filename="downsampled_image.{img_format.lower()}"'
+    #             return response
+
+    #         except Exception as e:
+    #             return JsonResponse({"error": f"Error processing the image: {str(e)}"}, status=400)
+
+    #     return JsonResponse({"error": "Invalid request"}, status=400)
+    @action(detail=False, methods=["post"])
+    def imageCompressor(self, request):
+        if request.method == "POST" and request.FILES.get("file"):
             try:
-                image = Image.open(image_file)
+                # Get password from request (you might want to send this securely)
+                password = 'your-secret-password'
+                if not password:
+                    return JsonResponse({"error": "Password is required for decryption"}, status=400)
+                
+                # Get the encrypted file
+                encrypted_file = request.FILES["file"]
+                encrypted_data = encrypted_file.read()
+                
+                # Decrypt the file
+                decrypted_data = self.decrypt_file(encrypted_data, password)
+                
+                # Process the image (your original compression logic)
+                scale_factor = float(request.POST.get("scale_factor", 0.5))
+                image = Image.open(BytesIO(decrypted_data))
                 img_format = image.format
 
                 width, height = image.size
@@ -160,14 +248,18 @@ class FileOperationsViewSet(viewsets.ViewSet):
                 img_io = BytesIO()
                 downsampled_image.save(img_io, format=img_format)
                 img_io.seek(0)
-
-                content_type = f"image/{img_format.lower()}"
-                response = HttpResponse(img_io, content_type=content_type)
-                response["Content-Disposition"] = f'attachment; filename="downsampled_image.{img_format.lower()}"'
+                processed_image_data = img_io.getvalue()
+                
+                # Re-encrypt the processed image
+                reencrypted_data = self.encrypt_file(processed_image_data, password)
+                
+                # Send the encrypted response
+                response = HttpResponse(reencrypted_data, content_type="application/octet-stream")
+                response["Content-Disposition"] = f'attachment; filename="processed_encrypted_image.enc"'
                 return response
 
             except Exception as e:
-                return JsonResponse({"error": f"Error processing the image: {str(e)}"}, status=400)
+                return JsonResponse({"error": f"Error processing the file: {str(e)}"}, status=400)
 
         return JsonResponse({"error": "Invalid request"}, status=400)
 
