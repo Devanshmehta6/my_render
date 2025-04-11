@@ -98,39 +98,50 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     @EncryptionMixin.simple_encrypt
     def split_pdf_file(self, request):
-        # """Endpoint to handle PDF splitting."""
+        """Endpoint to handle PDF splitting with encryption/decryption."""
         uploaded_file = request.FILES.get('file')
 
         if not uploaded_file:
             return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-        temp_pdf_path = default_storage.save(uploaded_file.name, uploaded_file)
-        temp_pdf_full_path = default_storage.path(temp_pdf_path)
-        print(temp_pdf_full_path)
-
-        output_folder = os.path.join(settings.MEDIA_ROOT, "split_pdfs")
-        os.makedirs(output_folder, exist_ok=True)
-
         try:
-            split_files = self.split_pdf(temp_pdf_full_path, output_folder)
-            zip_filename = "split_pdfs.zip"
-            zip_filepath = os.path.join(output_folder, zip_filename)
-            with zipfile.ZipFile(zip_filepath, 'w') as zipf:
-                for file in split_files:
-                    zipf.write(file, os.path.basename(file))
-            for file in split_files:
-                os.remove(file)  # Clean up individual files after zipping
+            # Create temporary working directory
+            output_folder = os.path.join(settings.MEDIA_ROOT, "split_pdfs")
+            os.makedirs(output_folder, exist_ok=True)
+            
+            # Get the decrypted file from request (handled by mixin)
+            # The mixin has already decrypted the file at this point
+            temp_pdf_path = os.path.join(output_folder, uploaded_file.name)
+            
+            # Save the decrypted file temporarily
+            with open(temp_pdf_path, 'wb') as f:
+                for chunk in uploaded_file.chunks():
+                    f.write(chunk)
 
-            with open(zip_filepath, 'rb') as zipf:
-                response = HttpResponse(zipf.read(), content_type='application/zip')
-                response['Content-Disposition'] = f'attachment; filename={zip_filename}'
-                return response
+            # Split the PDF into individual pages
+            split_files = self.split_pdf(temp_pdf_path, output_folder)
+            
+            # Create zip file in memory (don't save to disk)
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in split_files:
+                    with open(file, 'rb') as f:
+                        file_data = f.read()
+                    zipf.writestr(os.path.basename(file), file_data)
+            
+            # Clean up temporary files
+            os.remove(temp_pdf_path)
+            for file in split_files:
+                os.remove(file)
+            
+            # Prepare response - will be encrypted by the mixin
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
+            response['Content-Disposition'] = 'attachment; filename="split_pages.zip"'
+            return response
+
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        finally:
-            if os.path.exists(zip_filepath):
-                os.remove(zip_filepath)
-    # split_pdf_file = EncryptionMixin.with_encryption(split_pdf_file)   
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)   
 
 
     def merge_pdfs(self, pdf_files):
