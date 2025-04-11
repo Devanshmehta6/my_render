@@ -32,7 +32,7 @@ class EncryptionMixin:
         def wrapper(self, request, *args, **kwargs):
             password = request.headers.get('X-Password', 'defaultpass')
             
-            if hasattr(request, 'FILES') and request.FILES:
+            if hasattr(request, 'files') and request.FILES:
                 decrypted_files = {}
                 for name, file in request.FILES.items():
                     try:

@@ -96,6 +96,7 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         return split_files
     
     @action(detail=False, methods=['post'])
+    @EncryptionMixin.simple_encrypt
     def split_pdf_file(self, request):
         # """Endpoint to handle PDF splitting."""
         uploaded_file = request.FILES.get('file')
