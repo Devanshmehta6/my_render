@@ -3,7 +3,7 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 from functools import wraps
 from django.http import JsonResponse
-from django.core.files.uploadedfile import InMemoryUploadedFile
+from django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile
 from io import BytesIO
 
 
@@ -32,24 +32,37 @@ class EncryptionMixin:
         def wrapper(self, request, *args, **kwargs):
             password = request.headers.get('X-Password', 'defaultpass')
             
-            # Decrypt incoming files
             if hasattr(request, 'FILES') and request.FILES:
                 decrypted_files = {}
                 for name, file in request.FILES.items():
                     try:
-                        # Read and decrypt
                         encrypted_data = file.read()
                         decrypted_data = self.decrypt_data(encrypted_data, password)
                         
-                        # Reconstruct file object properly
-                        decrypted_file = InMemoryUploadedFile(
-                            file=BytesIO(decrypted_data),
-                            field_name=file.field_name,
-                            name=file.name,
-                            content_type=file.content_type,
-                            size=len(decrypted_data),
-                            charset=file.charset
-                        )
+                        # Handle both file types
+                        if isinstance(file, InMemoryUploadedFile):
+                            decrypted_file = InMemoryUploadedFile(
+                                file=BytesIO(decrypted_data),
+                                field_name=name,  # Use the parameter name as field_name
+                                name=file.name,
+                                content_type=file.content_type,
+                                size=len(decrypted_data),
+                                charset=file.charset
+                            )
+                        elif isinstance(file, TemporaryUploadedFile):
+                            # For temporary files, write to a new temp file
+                            temp_file = TemporaryUploadedFile(
+                                name=file.name,
+                                content_type=file.content_type,
+                                size=len(decrypted_data),
+                                charset=file.charset
+                            )
+                            temp_file.write(decrypted_data)
+                            temp_file.seek(0)
+                            decrypted_file = temp_file
+                        else:
+                            raise ValueError(f"Unknown file type: {type(file)}")
+                            
                         decrypted_files[name] = decrypted_file
                         
                     except Exception as e:
