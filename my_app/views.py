@@ -5,6 +5,7 @@ from datetime import datetime, time
 from io import BytesIO
 import json
 import subprocess
+import uuid
 # import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
 import pandas as pd
@@ -41,45 +42,32 @@ from Crypto.Hash import SHA256, HMAC
 from .utils.encryption import EncryptionMixin
 
 
-
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
 class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
 
-    # def generate_key(self, password):
-    #     # This should match your JavaScript PBKDF2 settings
-    #     salt = b"your-static-salt"  # Must match the salt used in JS
-    #     iterations = 100000
-    #     key = PBKDF2(password.encode(), salt, dkLen=32, count=iterations, prf=lambda p, s: HMAC.new(p, s, SHA256).digest())
-    #     return key
+    @staticmethod
+    def get_key(password):
+        """Generate 32-byte key from password"""
+        return password.encode().ljust(32, b'\0')[:32]
 
-    # def encrypt_file(self, data, password):
-    #     # Generate key
-    #     key = self.generate_key(password)
-        
-    #     # Generate random IV
-    #     iv = os.urandom(12)
-        
-    #     # Encrypt
-    #     cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
-    #     ciphertext, tag = cipher.encrypt_and_digest(data)
-        
-    #     # Combine IV and ciphertext
-    #     encrypted_data = iv + ciphertext
-        
-    #     return encrypted_data
-    
-    # def decrypt_file(self, encrypted_data, password):
-    #     # Extract IV (first 12 bytes)
-    #     iv = encrypted_data[:12]
-    #     ciphertext = encrypted_data[12:]
-        
-    #     # Generate key
-    #     key = self.generate_key(password)
-    #     print('key', key)
-    #     # Decrypt
-    #     cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
-    #     decrypted_data = cipher.decrypt(ciphertext)
-        
-    #     return decrypted_data
+    def decrypt_pdf(self, encrypted_data, password):
+        """AES-256-CBC decryption"""
+        try:
+            iv = encrypted_data[:16]
+            ciphertext = encrypted_data[16:]
+            cipher = AES.new(self.get_key(password), AES.MODE_CBC, iv)
+            return unpad(cipher.decrypt(ciphertext), AES.block_size)
+        except Exception as e:
+            # logger.error(f"Decryption failed: {str(e)}")
+            raise ValueError("Invalid password or corrupted file")
+
+    def encrypt_data(self, data, password):
+        """AES-256-CBC encryption"""
+        iv = get_random_bytes(16)
+        cipher = AES.new(self.get_key(password), AES.MODE_CBC, iv)
+        return iv + cipher.encrypt(pad(data, AES.block_size))
 
     def split_pdf(self, pdf_path, output_folder):
         with open(pdf_path, 'rb') as f:
@@ -96,53 +84,101 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         return split_files
     
     @action(detail=False, methods=['post'])
-    @EncryptionMixin.simple_encrypt
+    # @EncryptionMixin.simple_encrypt
     def split_pdf_file(self, request):
-        """Endpoint to handle PDF splitting with encryption/decryption."""
-        uploaded_file = request.FILES.get('file')
-
-        if not uploaded_file:
-            return Response({"error": "No file provided"}, status=status.HTTP_400_BAD_REQUEST)
-
+    # """Splits PDF into individual pages and returns them in a ZIP"""
+        # try:
+        #     # 1. Validate input
+        #     if 'file' not in request.FILES:
+        #         return JsonResponse({"error": "No file provided"}, status=400)
+            
+        #     pdf_file = request.FILES['file']
+            
+        #     # 2. Create in-memory PDF reader
+        #     pdf_reader = PyPDF2.PdfReader(pdf_file)
+        #     if len(pdf_reader.pages) == 0:
+        #         return JsonResponse({"error": "Empty PDF file"}, status=400)
+            
+        #     # 3. Prepare ZIP in memory
+        #     zip_buffer = BytesIO()
+        #     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        #         # 4. Split PDF pages
+        #         for page_num in range(len(pdf_reader.pages)):
+        #             writer = PyPDF2.PdfWriter()
+        #             writer.add_page(pdf_reader.pages[page_num])
+                    
+        #             # Write single page to ZIP
+        #             page_data = BytesIO()
+        #             writer.write(page_data)
+        #             page_data.seek(0)
+        #             zip_file.writestr(f"page_{page_num + 1}.pdf", page_data.getvalue())
+            
+        #     # 5. Return ZIP response
+        #     zip_buffer.seek(0)
+        #     response = HttpResponse(zip_buffer, content_type='application/zip')
+        #     response['Content-Disposition'] = 'attachment; filename="split_pages.zip"'
+        #     return response
+            
+        # except Exception as e:
+        #     return JsonResponse(
+        #         {"error": f"PDF processing failed: {str(e)}"},
+        #         status=500
+        #     )
         try:
-            # Create temporary working directory
-            output_folder = os.path.join(settings.MEDIA_ROOT, "split_pdfs")
-            os.makedirs(output_folder, exist_ok=True)
+            # 1. Validate input
+            if 'file' not in request.FILES:
+                return JsonResponse({"error": "No file provided"}, status=400)
             
-            # Get the decrypted file from request (handled by mixin)
-            # The mixin has already decrypted the file at this point
-            temp_pdf_path = os.path.join(output_folder, uploaded_file.name)
+            # 2. Get password from header
+            password = request.headers.get('X-Password')
+            if not password:
+                return JsonResponse({"error": "X-Password header is required"}, status=400)
             
-            # Save the decrypted file temporarily
-            with open(temp_pdf_path, 'wb') as f:
-                for chunk in uploaded_file.chunks():
-                    f.write(chunk)
-
-            # Split the PDF into individual pages
-            split_files = self.split_pdf(temp_pdf_path, output_folder)
+            # 3. Read and verify file
+            pdf_file = request.FILES['file']
+            encrypted_data = pdf_file.read()
             
-            # Create zip file in memory (don't save to disk)
+            try:
+                # 4. Decrypt with verification
+                decrypted_data = self.decrypt_data(encrypted_data, password)
+                
+                # Verify decryption by checking PDF header
+                if not decrypted_data.startswith(b'%PDF-'):
+                    return JsonResponse({"error": "Decryption failed - invalid PDF header"}, status=400)
+                    
+            except Exception as e:
+                return JsonResponse({"error": f"Decryption failed: {str(e)}"}, status=400)
+            
+            # 5. Process PDF
+            try:
+                pdf_reader = PyPDF2.PdfReader(BytesIO(decrypted_data))
+                if len(pdf_reader.pages) == 0:
+                    return JsonResponse({"error": "Empty PDF after decryption"}, status=400)
+            except Exception as e:
+                return JsonResponse({"error": f"Invalid PDF structure: {str(e)}"}, status=400)
+            
+            # 6. Create ZIP with encrypted pages
             zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for file in split_files:
-                    with open(file, 'rb') as f:
-                        file_data = f.read()
-                    zipf.writestr(os.path.basename(file), file_data)
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for page_num in range(len(pdf_reader.pages)):
+                    writer = PyPDF2.PdfWriter()
+                    writer.add_page(pdf_reader.pages[page_num])
+                    
+                    page_buffer = BytesIO()
+                    writer.write(page_buffer)
+                    page_buffer.seek(0)
+                    
+                    # Re-encrypt each page
+                    encrypted_page = self.encrypt_data(page_buffer.getvalue(), password)
+                    zip_file.writestr(f"page_{page_num+1}.pdf.enc", encrypted_page)
             
-            # Clean up temporary files
-            os.remove(temp_pdf_path)
-            for file in split_files:
-                os.remove(file)
-            
-            # Prepare response - will be encrypted by the mixin
             zip_buffer.seek(0)
-            response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
-            response['Content-Disposition'] = 'attachment; filename="split_pages.zip"'
+            response = HttpResponse(zip_buffer, content_type='application/zip')
+            response['Content-Disposition'] = 'attachment; filename="encrypted_pages.zip"'
             return response
-
+            
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)   
-
+            return JsonResponse({"error": f"Processing failed: {str(e)}"}, status=500)
 
     def merge_pdfs(self, pdf_files):
         merger = PyPDF2.PdfMerger()
