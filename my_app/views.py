@@ -194,7 +194,7 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         return output_path
     
     @action(detail=False, methods=['post'])
-    @EncryptionMixin.simple_encrypt
+    # @EncryptionMixin.simple_encrypt
     def mergePDF(self, request):
         # if request.method == 'POST':
         #     pdf_files = request.FILES.getlist('files')
@@ -210,28 +210,78 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         #         response = HttpResponse(merged_pdf.read(), content_type='application/pdf')
         #         response['Content-Disposition'] = 'attachment; filename="merged_output.pdf"'
         #         return response
-        pdf_files = request.FILES.getlist('files')
-    
-        if not pdf_files:
-            return JsonResponse({"error": "No files provided"}, status=400)
-        
         try:
-            # Process decrypted files
-            merged_pdf_path = self.merge_pdfs(pdf_files)
+        # 1. Validate input
+            if 'files' not in request.FILES:
+                return JsonResponse({"error": "No files provided"}, status=400)
             
-            # Response will be automatically encrypted by the mixin
-            with open(merged_pdf_path, 'rb') as merged_pdf:
-                response = HttpResponse(merged_pdf.read(), content_type='application/pdf')
-                response['Content-Disposition'] = 'attachment; filename="merged_output.pdf"'
+            # 2. Get password from header
+            password = request.headers.get('X-Password')
+            if not password:
+                return JsonResponse({"error": "X-Password header is required"}, status=400)
+            
+            # 3. Process all files
+            decrypted_pdfs = []
+            pdf_files = request.FILES.getlist('files')
+            
+            for pdf_file in pdf_files:
+                encrypted_data = pdf_file.read()
+                
+                try:
+                    # 4. Decrypt with verification
+                    decrypted_data = self.decrypt_data(encrypted_data, password)
+                    
+                    # Verify decryption by checking PDF header
+                    if not decrypted_data.startswith(b'%PDF-'):
+                        return JsonResponse(
+                            {"error": f"Decryption failed - invalid PDF header in {pdf_file.name}"},
+                            status=400
+                        )
+                        
+                    # 5. Validate PDF structure
+                    try:
+                        pdf_reader = PyPDF2.PdfReader(BytesIO(decrypted_data))
+                        if len(pdf_reader.pages) == 0:
+                            return JsonResponse(
+                                {"error": f"Empty PDF after decryption: {pdf_file.name}"},
+                                status=400
+                            )
+                        decrypted_pdfs.append(BytesIO(decrypted_data))
+                    except Exception as e:
+                        return JsonResponse(
+                            {"error": f"Invalid PDF structure in {pdf_file.name}: {str(e)}"},
+                            status=400
+                        )
+                        
+                except Exception as e:
+                    return JsonResponse(
+                        {"error": f"Decryption failed for {pdf_file.name}: {str(e)}"},
+                        status=400
+                    )
+            
+            # 6. Merge all validated PDFs
+            try:
+                merger = PyPDF2.PdfMerger()
+                for pdf_buffer in decrypted_pdfs:
+                    pdf_buffer.seek(0)
+                    merger.append(pdf_buffer)
+                
+                merged_buffer = BytesIO()
+                merger.write(merged_buffer)
+                merger.close()
+                
+                # 7. Encrypt the merged result
+                encrypted_result = self.encrypt_data(merged_buffer.getvalue(), password)
+                
+                response = HttpResponse(encrypted_result, content_type='application/pdf')
+                response['Content-Disposition'] = 'attachment; filename="merged_encrypted.pdf"'
                 return response
                 
+            except Exception as e:
+                return JsonResponse({"error": f"PDF merge failed: {str(e)}"}, status=500)
+                
         except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
-        finally:
-            # Clean up temporary file
-            if 'merged_pdf_path' in locals() and os.path.exists(merged_pdf_path):
-                os.remove(merged_pdf_path)
-    # mergePDF = EncryptionMixin.with_encryption(mergePDF)
+            return JsonResponse({"error": f"Processing failed: {str(e)}"}, status=500)
 
 
     @action(detail=False, methods=["post"])

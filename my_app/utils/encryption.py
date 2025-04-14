@@ -6,7 +6,7 @@ from functools import wraps
 from django.http import JsonResponse
 from io import BytesIO
 import logging
-
+from django.utils.datastructures import MultiValueDict
 logger = logging.getLogger(__name__)
 
 class EncryptionMixin:
@@ -53,12 +53,35 @@ class EncryptionMixin:
                 )
 
             # Decrypt incoming files
-            if hasattr(request, 'FILES') and request.FILES:
+            # if hasattr(request, 'files') and request.FILES:
+            #     try:
+            #         file = request.FILES['file']
+            #         encrypted_data = file.read()
+            #         decrypted_data = self.decrypt_data(encrypted_data, password)
+            #         request.FILES['file'] = BytesIO(decrypted_data)
+            #     except Exception as e:
+            #         return JsonResponse(
+            #             {'error': f'File decryption failed: {str(e)}'},
+            #             status=400
+            #         )
+            if hasattr(request, 'files') and request.FILES:
                 try:
-                    file = request.FILES['file']
-                    encrypted_data = file.read()
-                    decrypted_data = self.decrypt_data(encrypted_data, password)
-                    request.FILES['file'] = BytesIO(decrypted_data)
+                    # Check for single file (field name 'file') or multiple ('files')
+                    if 'file' in request.FILES:
+                        # Single file processing
+                        file = request.FILES['file']
+                        encrypted_data = file.read()
+                        decrypted_data = self.decrypt_data(encrypted_data, password)
+                        request.FILES['file'] = BytesIO(decrypted_data)
+                    elif 'files' in request.FILES:
+                        # Multiple files processing
+                        files = request.FILES.getlist('files')
+                        decrypted_files = []
+                        for file in files:
+                            encrypted_data = file.read()
+                            decrypted_data = self.decrypt_data(encrypted_data, password)
+                            decrypted_files.append(BytesIO(decrypted_data))
+                        request.FILES = MultiValueDict({'files': decrypted_files})
                 except Exception as e:
                     return JsonResponse(
                         {'error': f'File decryption failed: {str(e)}'},
