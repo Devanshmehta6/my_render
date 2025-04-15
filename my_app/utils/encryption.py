@@ -1,12 +1,13 @@
-# utils/encryption.py
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 from functools import wraps
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from io import BytesIO
 import logging
 from django.utils.datastructures import MultiValueDict
+from django.core.files.uploadedfile import InMemoryUploadedFile, TemporaryUploadedFile
+
 logger = logging.getLogger(__name__)
 
 class EncryptionMixin:
@@ -53,36 +54,47 @@ class EncryptionMixin:
                 )
 
             # Decrypt incoming files
-            # if hasattr(request, 'files') and request.FILES:
-            #     try:
-            #         file = request.FILES['file']
-            #         encrypted_data = file.read()
-            #         decrypted_data = self.decrypt_data(encrypted_data, password)
-            #         request.FILES['file'] = BytesIO(decrypted_data)
-            #     except Exception as e:
-            #         return JsonResponse(
-            #             {'error': f'File decryption failed: {str(e)}'},
-            #             status=400
-            #         )
-            if hasattr(request, 'files') and request.FILES:
+            if hasattr(request, 'FILES') and request.FILES:
                 try:
-                    # Check for single file (field name 'file') or multiple ('files')
-                    if 'file' in request.FILES:
-                        # Single file processing
-                        file = request.FILES['file']
-                        encrypted_data = file.read()
-                        decrypted_data = self.decrypt_data(encrypted_data, password)
-                        request.FILES['file'] = BytesIO(decrypted_data)
-                    elif 'files' in request.FILES:
-                        # Multiple files processing
-                        files = request.FILES.getlist('files')
+                    new_files = MultiValueDict()
+                    for field_name, file_list in request.FILES.lists():
                         decrypted_files = []
-                        for file in files:
+                        for file in file_list:
                             encrypted_data = file.read()
                             decrypted_data = self.decrypt_data(encrypted_data, password)
-                            decrypted_files.append(BytesIO(decrypted_data))
-                        request.FILES = MultiValueDict({'files': decrypted_files})
+                            
+                            # Proper file reconstruction for both types
+                            if isinstance(file, InMemoryUploadedFile):
+                                decrypted_file = InMemoryUploadedFile(
+                                    file=BytesIO(decrypted_data),
+                                    field_name=field_name,
+                                    name=file.name,
+                                    content_type=file.content_type,
+                                    size=len(decrypted_data),
+                                    charset=file.charset
+                                )
+                            elif isinstance(file, TemporaryUploadedFile):
+                                temp_file = TemporaryUploadedFile(
+                                    name=file.name,
+                                    content_type=file.content_type,
+                                    size=len(decrypted_data),
+                                    charset=file.charset,
+                                    content_type_extra=file.content_type_extra
+                                )
+                                temp_file.write(decrypted_data)
+                                temp_file.seek(0)
+                                decrypted_file = temp_file
+                            else:
+                                # Fallback to simple BytesIO for other cases
+                                decrypted_file = BytesIO(decrypted_data)
+                            
+                            decrypted_files.append(decrypted_file)
+                        
+                        new_files.setlist(field_name, decrypted_files)
+                    
+                    request._files = new_files
                 except Exception as e:
+                    logger.error(f"File decryption failed: {str(e)}")
                     return JsonResponse(
                         {'error': f'File decryption failed: {str(e)}'},
                         status=400
@@ -92,15 +104,16 @@ class EncryptionMixin:
             response = view_func(self, request, *args, **kwargs)
 
             # Encrypt response if it's binary data
-            if hasattr(response, 'content') and isinstance(response.content, bytes):
+            if isinstance(response, HttpResponse) and response.content:
                 try:
                     encrypted = self.encrypt_data(response.content, password)
                     response.content = encrypted
                     response['Content-Type'] = 'application/octet-stream'
                     if 'Content-Disposition' in response:
-                        filename = response['Content-Disposition'].split('filename=')[-1]
-                        response['Content-Disposition'] = f'attachment; filename="enc_{filename}'
+                        filename = response['Content-Disposition'].split('filename=')[-1].strip('"')
+                        response['Content-Disposition'] = f'attachment; filename="enc_{filename}"'
                 except Exception as e:
+                    logger.error(f"Response encryption failed: {str(e)}")
                     return JsonResponse(
                         {'error': f'Response encryption failed: {str(e)}'},
                         status=500

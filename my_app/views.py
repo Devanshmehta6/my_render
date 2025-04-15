@@ -1,11 +1,12 @@
 
 
 from datetime import datetime, time
-
+import logging
 from io import BytesIO
 import json
 import subprocess
 import uuid
+from venv import logger
 # import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
 import pandas as pd
@@ -308,45 +309,79 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         else:
             return HttpResponseNotFound("File not found")
     
-    
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["POST"])
     @EncryptionMixin.simple_encrypt
-    def imageCompressor(self,request):
-        if request.method == "POST" and request.FILES.get("file"):
+    def imageCompressor(self, request):
+        try:
+            # 1. Verify we have a file
+            if not request.FILES.get('file'):
+                return JsonResponse({"error": "No file provided"}, status=400)
+
+            # 2. Get the decrypted file from the mixin
+            file_obj = request.FILES['file']
             
-            image_file = request.FILES["file"]
-            scale_factor = float(request.POST.get("scale_factor", 0.5))  # Default to 0.5 if not provided
-
+            # 3. Create in-memory file object
+            img_data = file_obj.read()
+            img_io = BytesIO(img_data)
+            
+            # 4. Process image
             try:
-                image = Image.open(image_file)
-                img_format = image.format
-
+                image = Image.open(img_io)
+                # Preserve original format or default to JPEG
+                img_format = image.format or 'JPEG'  
+                
+                # Get scale factor
+                scale_factor = float(request.POST.get('scale_factor', 0.5))
+                
+                # Calculate new dimensions
                 width, height = image.size
                 new_width = int(width * scale_factor)
                 new_height = int(height * scale_factor)
-
-                downsampled_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-                img_io = BytesIO()
-                downsampled_image.save(img_io, format=img_format)
-                img_io.seek(0)
-
-                content_type = f"image/{img_format.lower()}"
-                response = HttpResponse(img_io, content_type=content_type)
-                response["Content-Disposition"] = f'attachment; filename="downsampled_image.{img_format.lower()}"'
+                
+                # Resize image
+                resized_image = image.resize(
+                    (new_width, new_height),
+                    Image.Resampling.LANCZOS
+                )
+                
+                # Save to output buffer
+                output_buffer = BytesIO()
+                resized_image.save(output_buffer, format=img_format)
+                output_buffer.seek(0)
+                
+                # Create response
+                response = HttpResponse(
+                    output_buffer.getvalue(),
+                    content_type=f'image/{img_format.lower()}'
+                )
+                response['Content-Disposition'] = (
+                    f'attachment; filename="compressed.{img_format.lower()}"'
+                )
+                
                 return response
-
-            except Exception as e:
-                return JsonResponse({"error": f"Error processing the image: {str(e)}"}, status=400)
-
-        return JsonResponse({"error": "Invalid request"}, status=400)
+                
+            except Exception as img_error:
+                logger.error(f"Image processing error: {str(img_error)}", exc_info=True)
+                return JsonResponse(
+                    {"error": f"Image processing failed: {str(img_error)}"},
+                    status=400
+                )
+                
+        except Exception as e:
+            logger.error(f"Server error: {str(e)}", exc_info=True)
+            return JsonResponse(
+                {"error": f"Internal server error: {str(e)}"},
+                status=500
+            )
+    
+    
     
     # @action(detail=False, methods=["post"])
     # def imageCompressor(self, request):
     #     if request.method == "POST" and request.FILES.get("file"):
     #         try:
     #             # Get password from request (you might want to send this securely)
-    #             password = 'your-secret-password'
+    #             password = 'password123'
     #             if not password:
     #                 return JsonResponse({"error": "Password is required for decryption"}, status=400)
                 
