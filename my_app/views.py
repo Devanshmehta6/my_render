@@ -635,50 +635,48 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             return False
         
     @action(detail=False, methods=["post"])
-    def compress_pdf(self,request):
-        
+    def compress_pdf(self, request):
         if 'file' not in request.FILES:
             return HttpResponseBadRequest("No file uploaded")
-    
+
         pdf_file = request.FILES['file']
         if not pdf_file.name.lower().endswith('.pdf'):
             return HttpResponseBadRequest("Only PDF files are supported")
-        
+
         try:
             target_size_kb = float(request.POST.get('target_size_kb', 500))  # Default 500KB
         except ValueError:
             return HttpResponseBadRequest("target_size_kb must be a number")
-        
-        # Setup paths
+
+        # Setup temp directory
         temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_pdfs')
         os.makedirs(temp_dir, exist_ok=True)
         
         input_path = os.path.join(temp_dir, f"input_{pdf_file.name}")
         output_path = os.path.join(temp_dir, f"compressed_{pdf_file.name}")
-        
+
         # Save uploaded file
         with open(input_path, 'wb+') as destination:
             for chunk in pdf_file.chunks():
                 destination.write(chunk)
-        
+
         # Compression parameters
         original_size_kb = self.get_file_size(input_path) / 1024
         if original_size_kb <= target_size_kb:
-            return JsonResponse({
-                'status': 'already_optimal',
-                'original_size': original_size_kb,
-                'compressed_size': original_size_kb,
-                'message': 'File is already smaller than target size'
-            })
-        
-        # Compression logic
+            # Return original file if already small enough
+            response = FileResponse(open(input_path, 'rb'), content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
+            os.remove(input_path)
+            return response
+
+        # Compression logic (unchanged from your original)
         min_quality = 0
         max_quality = 100
         current_quality = 30
         best_output = None
         best_size = float('inf')
         extra_compression = False
-        
+
         for iteration in range(15):  # max 15 iterations
             temp_output = os.path.join(temp_dir, f"temp_{iteration}.pdf")
             success = self.compress_pdf_func(input_path, temp_output, current_quality, extra_compression)
@@ -697,17 +695,10 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
                     if f.startswith('temp_'):
                         os.remove(os.path.join(temp_dir, f))
                 
-                compressed_url = default_storage.url(
-                    os.path.relpath(output_path, settings.MEDIA_ROOT)
-                )
-                
-                return JsonResponse({
-                    'status': 'success',
-                    'original_size': original_size_kb,
-                    'compressed_size': current_size_kb,
-                    'compressed_url': compressed_url,
-                    'compression_ratio': f"{((original_size_kb - current_size_kb) / original_size_kb) * 100:.1f}%"
-                })
+                # Return the compressed file directly
+                response = FileResponse(open(output_path, 'rb'), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
+                return response
             
             # Update best solution
             if current_size_kb < best_size:
@@ -718,7 +709,7 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             else:
                 os.remove(temp_output)
             
-            # Adjust quality
+            # Adjust quality (unchanged)
             size_ratio = current_size_kb / target_size_kb
             quality_adjustment = math.log(size_ratio) * 15
             
@@ -737,29 +728,20 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             if iteration > 8 and (best_size / target_size_kb) > 1.5:
                 current_quality = max(0, current_quality - 15)
                 extra_compression = True
-        
-        # If we get here, use the best we found
+
+        # If we get here, return the best we found
         if best_output:
             shutil.move(best_output, output_path)
-            compressed_url = default_storage.url(
-                os.path.relpath(output_path, settings.MEDIA_ROOT)
-            )
-            
             # Cleanup
             os.remove(input_path)
             for f in os.listdir(temp_dir):
                 if f.startswith('temp_'):
                     os.remove(os.path.join(temp_dir, f))
             
-            return JsonResponse({
-                'status': 'partial_success',
-                'original_size': original_size_kb,
-                'compressed_size': best_size,
-                'compressed_url': compressed_url,
-                'compression_ratio': f"{((original_size_kb - best_size) / original_size_kb) * 100:.1f}%",
-                'message': 'Could not reach target size, but achieved best possible compression'
-            })
-        
+            response = FileResponse(open(output_path, 'rb'), content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
+            return response
+
         # Cleanup on failure
         os.remove(input_path)
         return JsonResponse({
