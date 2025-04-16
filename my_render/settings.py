@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 import os
 from pathlib import Path
+from subprocess import check_output
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -129,5 +130,8 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static')
 ]
+
+# os.environ['PATH'] += r';C:\Program Files\gs\gs10.04.0\bin'
+
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

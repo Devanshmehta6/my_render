@@ -4,11 +4,14 @@ from datetime import datetime, time
 import logging
 from io import BytesIO
 import json
+import math
 import subprocess
+import sys
+import tempfile
 import uuid
 from venv import logger
 # import tempfile
-from django.http import FileResponse, HttpResponse, HttpResponseNotFound, JsonResponse
+from django.http import FileResponse, HttpResponse, HttpResponseBadRequest, HttpResponseNotFound, JsonResponse
 import pandas as pd
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
@@ -497,69 +500,276 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             messages.error(request, f'Error during conversion: {str(e)}')
             return HttpResponse("error here")
     
+    # @action(detail=False, methods=["post"])
+    # def compress_pdf(self, request):
+    #     if request.method == 'POST':
+    #         # Get the uploaded file and target size
+    #         uploaded_file = request.FILES.get('pdf_file')
+    #         target_size_kb = request.POST.get('target_size_kb')
+
+    #         if not uploaded_file or not target_size_kb:
+    #             return JsonResponse({"error": "Both PDF file and target size are required."}, status=400)
+
+    #         try:
+    #             target_size_kb = float(target_size_kb)
+    #         except ValueError:
+    #             return JsonResponse({"error": "Target size must be a number."}, status=400)
+
+    #         # Define upload paths
+    #         upload_dir = os.path.join(settings.MEDIA_ROOT, "uploads")
+    #         compressed_dir = os.path.join(settings.MEDIA_ROOT, "compressed")
+
+    #         # Ensure directories exist
+    #         os.makedirs(upload_dir, exist_ok=True)
+    #         os.makedirs(compressed_dir, exist_ok=True)
+
+    #         # Save the uploaded file in MEDIA_ROOT/uploads/
+    #         temp_file_path = os.path.join(upload_dir, uploaded_file.name)
+    #         with open(temp_file_path, 'wb') as f:
+    #             for chunk in uploaded_file.chunks():
+    #                 f.write(chunk)
+
+    #         # Compress the PDF
+    #         compressor = PDFCompressor()
+    #         compressed_file_path = compressor.compress_to_target_size(temp_file_path, target_size_kb)
+
+    #         if compressed_file_path:
+    #             # Move compressed file to MEDIA_ROOT/compressed/
+    #             compressed_output_path = os.path.join(compressed_dir, Path(compressed_file_path).name)
+    #             os.rename(compressed_file_path, compressed_output_path)
+
+    #             # Open the compressed file for reading
+    #             file_handle = open(compressed_output_path, 'rb')
+
+    #             # Create a custom HttpResponse with cleanup logic
+    #             response = HttpResponse(file_handle, content_type="application/pdf")
+    #             response["Content-Disposition"] = f'attachment; filename="{Path(compressed_output_path).name}"'
+
+    #             # Define cleanup logic in the close method
+    #             def cleanup():
+    #                 file_handle.close()  # Close the file handle
+    #                 try:
+    #                     # Delete the uploaded and compressed files
+    #                     for file_path in [temp_file_path, compressed_output_path]:
+    #                         if os.path.exists(file_path):
+    #                             os.remove(file_path)
+    #                     print("Cleanup successful.")
+    #                 except Exception as e:
+    #                     print(f"Cleanup error: {e}")
+
+    #             # Attach the cleanup logic to the response
+    #             response.close = cleanup
+
+    #             return response
+    #         else:
+    #             return JsonResponse({"error": "Failed to compress the PDF."}, status=500)
+
+    def get_file_size(self,file_path):
+    # """Get file size in bytes"""
+        return os.path.getsize(file_path)
+    
+    def compress_pdf_func(self, input_path, output_path, quality=50, extra_compression=False):
+        
+        quality_map = {
+            0: "/screen",       # 72 dpi - most aggressive
+            25: "/ebook",       # 150 dpi
+            50: "/printer",     # 300 dpi
+            75: "/prepress",   # 300 dpi, color preserving
+            100: "/default"     # no quality reduction
+        }
+        
+        closest_quality = min(quality_map.keys(), key=lambda x: abs(x - quality))
+        quality_setting = quality_map[closest_quality]
+        
+        gs_args = [
+            "gs",
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.4",
+            f"-dPDFSETTINGS={quality_setting}",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH"
+        ]
+        
+        if extra_compression or quality < 30:
+            gs_args.extend([
+                "-dDetectDuplicateImages=true",
+                "-dColorImageDownsampleType=/Bicubic",
+                "-dColorImageResolution=72",
+                "-dGrayImageDownsampleType=/Bicubic",
+                "-dGrayImageResolution=72",
+                "-dMonoImageDownsampleType=/Subsample",
+                "-dMonoImageResolution=72",
+                "-dDownsampleColorImages=true",
+                "-dDownsampleGrayImages=true",
+                "-dDownsampleMonoImages=true",
+                "-dColorConversionStrategy=/sRGB",
+                "-dProcessColorModel=/DeviceRGB",
+                "-dEmbedAllFonts=false",
+                "-dSubsetFonts=true",
+                "-dAutoRotatePages=/None",
+                "-dConvertCMYKImagesToRGB=true",
+                "-dCompressFonts=true",
+                "-dOptimize=true",
+            ])
+        
+        gs_args.extend([
+            f"-sOutputFile={output_path}",
+            input_path
+        ])
+        
+        try:
+            result = subprocess.run(
+                gs_args, 
+                check=True, 
+                stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE
+            )
+            logger.debug(f"Ghostscript output: {result.stdout.decode('utf-8')}")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Ghostscript error: {e.stderr.decode('utf-8')}")
+            return False
+        except FileNotFoundError:
+            logger.error("Ghostscript not found")
+            return False
+        
     @action(detail=False, methods=["post"])
-    def compress_pdf(self, request):
-        if request.method == 'POST':
-            # Get the uploaded file and target size
-            uploaded_file = request.FILES.get('pdf_file')
-            target_size_kb = request.POST.get('target_size_kb')
-
-            if not uploaded_file or not target_size_kb:
-                return JsonResponse({"error": "Both PDF file and target size are required."}, status=400)
-
-            try:
-                target_size_kb = float(target_size_kb)
-            except ValueError:
-                return JsonResponse({"error": "Target size must be a number."}, status=400)
-
-            # Define upload paths
-            upload_dir = os.path.join(settings.MEDIA_ROOT, "uploads")
-            compressed_dir = os.path.join(settings.MEDIA_ROOT, "compressed")
-
-            # Ensure directories exist
-            os.makedirs(upload_dir, exist_ok=True)
-            os.makedirs(compressed_dir, exist_ok=True)
-
-            # Save the uploaded file in MEDIA_ROOT/uploads/
-            temp_file_path = os.path.join(upload_dir, uploaded_file.name)
-            with open(temp_file_path, 'wb') as f:
-                for chunk in uploaded_file.chunks():
-                    f.write(chunk)
-
-            # Compress the PDF
-            compressor = PDFCompressor()
-            compressed_file_path = compressor.compress_to_target_size(temp_file_path, target_size_kb)
-
-            if compressed_file_path:
-                # Move compressed file to MEDIA_ROOT/compressed/
-                compressed_output_path = os.path.join(compressed_dir, Path(compressed_file_path).name)
-                os.rename(compressed_file_path, compressed_output_path)
-
-                # Open the compressed file for reading
-                file_handle = open(compressed_output_path, 'rb')
-
-                # Create a custom HttpResponse with cleanup logic
-                response = HttpResponse(file_handle, content_type="application/pdf")
-                response["Content-Disposition"] = f'attachment; filename="{Path(compressed_output_path).name}"'
-
-                # Define cleanup logic in the close method
-                def cleanup():
-                    file_handle.close()  # Close the file handle
-                    try:
-                        # Delete the uploaded and compressed files
-                        for file_path in [temp_file_path, compressed_output_path]:
-                            if os.path.exists(file_path):
-                                os.remove(file_path)
-                        print("Cleanup successful.")
-                    except Exception as e:
-                        print(f"Cleanup error: {e}")
-
-                # Attach the cleanup logic to the response
-                response.close = cleanup
-
-                return response
+    def compress_pdf(self,request):
+        
+        if 'file' not in request.FILES:
+            return HttpResponseBadRequest("No file uploaded")
+    
+        pdf_file = request.FILES['file']
+        if not pdf_file.name.lower().endswith('.pdf'):
+            return HttpResponseBadRequest("Only PDF files are supported")
+        
+        try:
+            target_size_kb = float(request.POST.get('target_size_kb', 500))  # Default 500KB
+        except ValueError:
+            return HttpResponseBadRequest("target_size_kb must be a number")
+        
+        # Setup paths
+        temp_dir = os.path.join(settings.MEDIA_ROOT, 'temp_pdfs')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        input_path = os.path.join(temp_dir, f"input_{pdf_file.name}")
+        output_path = os.path.join(temp_dir, f"compressed_{pdf_file.name}")
+        
+        # Save uploaded file
+        with open(input_path, 'wb+') as destination:
+            for chunk in pdf_file.chunks():
+                destination.write(chunk)
+        
+        # Compression parameters
+        original_size_kb = self.get_file_size(input_path) / 1024
+        if original_size_kb <= target_size_kb:
+            return JsonResponse({
+                'status': 'already_optimal',
+                'original_size': original_size_kb,
+                'compressed_size': original_size_kb,
+                'message': 'File is already smaller than target size'
+            })
+        
+        # Compression logic
+        min_quality = 0
+        max_quality = 100
+        current_quality = 30
+        best_output = None
+        best_size = float('inf')
+        extra_compression = False
+        
+        for iteration in range(15):  # max 15 iterations
+            temp_output = os.path.join(temp_dir, f"temp_{iteration}.pdf")
+            success = self.compress_pdf_func(input_path, temp_output, current_quality, extra_compression)
+            
+            if not success:
+                continue
+            
+            current_size_kb = self.get_file_size(temp_output) / 1024
+            
+            # Check if acceptable
+            if current_size_kb <= target_size_kb * 1.05:
+                shutil.move(temp_output, output_path)
+                # Cleanup
+                os.remove(input_path)
+                for f in os.listdir(temp_dir):
+                    if f.startswith('temp_'):
+                        os.remove(os.path.join(temp_dir, f))
+                
+                compressed_url = default_storage.url(
+                    os.path.relpath(output_path, settings.MEDIA_ROOT)
+                )
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'original_size': original_size_kb,
+                    'compressed_size': current_size_kb,
+                    'compressed_url': compressed_url,
+                    'compression_ratio': f"{((original_size_kb - current_size_kb) / original_size_kb) * 100:.1f}%"
+                })
+            
+            # Update best solution
+            if current_size_kb < best_size:
+                best_size = current_size_kb
+                if best_output:
+                    os.remove(best_output)
+                best_output = temp_output
             else:
-                return JsonResponse({"error": "Failed to compress the PDF."}, status=500)
+                os.remove(temp_output)
+            
+            # Adjust quality
+            size_ratio = current_size_kb / target_size_kb
+            quality_adjustment = math.log(size_ratio) * 15
+            
+            if current_size_kb > target_size_kb:
+                new_quality = current_quality - abs(quality_adjustment)
+                max_quality = current_quality
+            else:
+                new_quality = current_quality + (quality_adjustment * 0.5)
+                min_quality = current_quality
+            
+            current_quality = max(min_quality, min(max_quality, new_quality))
+            current_quality = int(round(current_quality))
+            
+            if iteration > 5 and (best_size / original_size_kb) > 0.7:
+                extra_compression = True
+            if iteration > 8 and (best_size / target_size_kb) > 1.5:
+                current_quality = max(0, current_quality - 15)
+                extra_compression = True
+        
+        # If we get here, use the best we found
+        if best_output:
+            shutil.move(best_output, output_path)
+            compressed_url = default_storage.url(
+                os.path.relpath(output_path, settings.MEDIA_ROOT)
+            )
+            
+            # Cleanup
+            os.remove(input_path)
+            for f in os.listdir(temp_dir):
+                if f.startswith('temp_'):
+                    os.remove(os.path.join(temp_dir, f))
+            
+            return JsonResponse({
+                'status': 'partial_success',
+                'original_size': original_size_kb,
+                'compressed_size': best_size,
+                'compressed_url': compressed_url,
+                'compression_ratio': f"{((original_size_kb - best_size) / original_size_kb) * 100:.1f}%",
+                'message': 'Could not reach target size, but achieved best possible compression'
+            })
+        
+        # Cleanup on failure
+        os.remove(input_path)
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Failed to compress PDF'
+        }, status=500)
+    
+    
+    
+
 
 
     # def audio_to_text(self,audio_path):
@@ -635,3 +845,16 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
     #             #     os.unlink(pdf_path)
 
     #     return JsonResponse({"error": "Invalid request"}, status=400)
+
+def determine_initial_compression_level(original_size, target_size_bytes):
+        """Determine initial compression level based on size reduction needed."""
+        size_ratio = original_size / target_size_bytes
+        
+        if size_ratio < 2:
+            return 1  # Light compression
+        elif size_ratio < 5:
+            return 2  # Medium compression
+        elif size_ratio < 10:
+            return 3  # Heavy compression
+        else:
+            return 4
