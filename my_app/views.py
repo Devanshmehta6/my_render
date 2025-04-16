@@ -635,6 +635,7 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             return False
         
     @action(detail=False, methods=["post"])
+    @EncryptionMixin.simple_encrypt
     def compress_pdf(self, request):
         if 'file' not in request.FILES:
             return HttpResponseBadRequest("No file uploaded")
