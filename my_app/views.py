@@ -743,40 +743,15 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         #     response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
         #     return response
         if best_output:
-        # Read the compressed PDF
-            with open(best_output, 'rb') as f:
-                pdf_data = f.read()
-
-            # Encrypt the PDF using AES-256-CBC
-            password = request.headers.get('X-Password')  # Must be provided in headers
-            if not password:
-                return JsonResponse(
-                    {'error': 'X-Password header is required for encryption'},
-                    status=400
-                )
-
-            try:
-                encrypted_data = self.encrypt_data(pdf_data, password)
-            except Exception as e:
-                logger.error(f"PDF encryption failed: {str(e)}")
-                return JsonResponse(
-                    {'error': f'Failed to encrypt PDF: {str(e)}'},
-                    status=500
-                )
-
-            # Cleanup temp files
+            shutil.move(best_output, output_path)
             os.remove(input_path)
-            os.remove(best_output)
             for f in os.listdir(temp_dir):
                 if f.startswith('temp_'):
                     os.remove(os.path.join(temp_dir, f))
-
-            # Return encrypted data as HttpResponse
-            response = HttpResponse(
-                encrypted_data,
-                content_type='application/octet-stream'
-            )
-            response['Content-Disposition'] = f'attachment; filename="enc_compressed_{pdf_file.name}"'
+            with open(output_path, 'rb') as f:
+                content = f.read()
+            response = HttpResponse(content, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
             return response
 
         # Cleanup on failure
