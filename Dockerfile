@@ -2,7 +2,17 @@
 FROM python:3.9-slim
 
 # Install Ghostscript and other system dependencies
-RUN apt-get update && apt-get install -y ghostscript && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y ghostscript && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    ghostscript \
+    # OpenCV dependencies
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Set the working directory
 WORKDIR /app
