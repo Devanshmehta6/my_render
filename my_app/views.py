@@ -1,17 +1,19 @@
 
 
 from datetime import datetime, time
+import io
 import logging
 from io import BytesIO
 import json
 import math
 import subprocess
-import sys
-import tempfile
-import uuid
+# import sys
+# import tempfile
+# import uuid
 from venv import logger
 # import tempfile
 from django.http import FileResponse, HttpResponse, HttpResponseBadRequest, HttpResponseNotFound, JsonResponse
+import numpy as np
 import pandas as pd
 from rest_framework.decorators import action, api_view
 from rest_framework.response import Response
@@ -45,6 +47,10 @@ from Crypto.Util.Padding import unpad
 from Crypto.Hash import SHA256, HMAC
 from .utils.encryption import EncryptionMixin
 
+from django.core.files.uploadedfile import InMemoryUploadedFile
+from PIL import Image
+import cv2
+from rembg import remove
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
@@ -772,6 +778,65 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
             'message': 'Failed to compress PDF'
         }, status=500)
     
+
+    @action(detail=False, methods=["post"])
+    def profile_photo(self, request):
+        if 'image' not in request.FILES:
+            return JsonResponse({'error': 'No image file provided'}, status=400)
+        
+        try:
+            # Get the uploaded file
+            uploaded_file = request.FILES['image']
+            
+            # Read the image file
+            if isinstance(uploaded_file, InMemoryUploadedFile):
+                img_bytes = uploaded_file.read()
+            else:
+                with open(uploaded_file.temporary_file_path(), 'rb') as f:
+                    img_bytes = f.read()
+            
+            # Convert to numpy array for OpenCV processing
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            # Convert to grayscale for face detection
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Load the pre-trained face detection model
+            face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            face_cascade = cv2.CascadeClassifier(face_cascade_path)
+            
+            # Detect faces in the image
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            
+            # Convert back to PIL Image for background removal
+            pil_img = Image.open(io.BytesIO(img_bytes))
+            
+            if len(faces) > 0:
+                # Remove the background
+                output_image = remove(pil_img)
+                
+                # Convert to RGB and add a white background
+                output_image = output_image.convert("RGBA")
+                white_bg = Image.new("RGBA", output_image.size, "WHITE")
+                output_image = Image.alpha_composite(white_bg, output_image).convert("RGB")
+            else:
+                # Use original image if no face detected
+                output_image = pil_img.convert("RGB")
+            
+            # Save the processed image to a bytes buffer
+            output_buffer = io.BytesIO()
+            output_image.save(output_buffer, format="JPEG", quality=85)
+            output_buffer.seek(0)
+            
+            # Create response with processed image
+            response = HttpResponse(output_buffer.getvalue(), content_type='image/jpeg')
+            response['Content-Disposition'] = f'attachment; filename="processed_{uploaded_file.name}"'
+            
+            return response
+        
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
     
     
 
