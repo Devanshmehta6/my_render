@@ -743,15 +743,26 @@ class FileOperationsViewSet(EncryptionMixin, viewsets.ViewSet):
         #     response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
         #     return response
         if best_output:
-            shutil.move(best_output, output_path)
+            # Read compressed PDF into memory
+            with open(best_output, 'rb') as f:
+                pdf_data = f.read()
+
+            # Create HttpResponse (will be auto-encrypted by @simple_encrypt)
+            response = HttpResponse(
+                pdf_data,
+                content_type='application/pdf'
+            )
+            response['Content-Disposition'] = (
+                f'attachment; filename="compressed_{pdf_file.name}"'
+            )
+
+            # Cleanup
             os.remove(input_path)
+            os.remove(best_output)
             for f in os.listdir(temp_dir):
                 if f.startswith('temp_'):
                     os.remove(os.path.join(temp_dir, f))
-            with open(output_path, 'rb') as f:
-                content = f.read()
-            response = HttpResponse(content, content_type='application/pdf')
-            response['Content-Disposition'] = f'attachment; filename="compressed_{pdf_file.name}"'
+
             return response
 
         # Cleanup on failure
